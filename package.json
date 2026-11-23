@@ -1,0 +1,24 @@
+{
+  "name": "warhammer-navigator",
+  "private": true,
+  "packageManager": "pnpm@11.10.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @wn/shared build && concurrently -k -n shared,api,web -c blue,green,magenta \"pnpm --filter @wn/shared dev\" \"pnpm --filter api dev\" \"pnpm --filter web dev\"",
+    "dev:api": "pnpm --filter @wn/shared build && pnpm --filter api dev",
+    "dev:web": "pnpm --filter web dev",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f db",
+    "db:generate": "pnpm --filter api exec prisma generate",
+    "db:studio": "pnpm --filter api exec prisma studio",
+    "db:seed": "pnpm --filter @wn/shared build && pnpm --filter api db:seed",
+    "test": "pnpm -r test",
+    "build": "pnpm --filter \"api...\" --filter \"web...\" build"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7"
+  }
+}

@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: wn-postgres
+    environment:
+      POSTGRES_USER: wn
+      POSTGRES_PASSWORD: wn
+      POSTGRES_DB: wn
+    ports:
+      - "5433:5432" # 5432 do host é de outro projeto
+    volumes:
+      - wn-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wn -d wn"]
+      interval: 5s
+      retries: 10
+volumes:
+  wn-pgdata:

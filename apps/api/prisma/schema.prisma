@@ -1,0 +1,542 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── Enums ───────────────────────────
+
+enum UserRole {
+  PLAYER
+  ADMIN
+}
+
+enum WorldStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+enum ResourceType {
+  FOOD
+  WOOD
+  STONE
+  GOLD
+}
+
+enum ResourceNodeStatus {
+  AVAILABLE // pode estar ocupado: ver occupiedByMarchId
+  DEPLETED // esgotado, aguardando respawn
+}
+
+enum NpcCampStatus {
+  ACTIVE
+  DEFEATED
+}
+
+enum MarchType {
+  GATHER
+  ATTACK_NPC
+  ATTACK_PLAYER
+  REINFORCE // GDD 12: fica na cidade do aliado até ser chamada de volta
+}
+
+enum MarchState {
+  OUTBOUND // indo até o alvo
+  GATHERING // parada no nó coletando
+  STATIONED // reforço parado na cidade de outro jogador
+  RETURNING // voltando para a cidade
+  COMPLETED // chegou em casa (histórico)
+}
+
+enum MarchTargetKind {
+  RESOURCE_NODE
+  NPC_CAMP
+  CITY
+}
+
+enum ReportKind {
+  GATHER
+  BATTLE_NPC
+  BATTLE_PVP
+}
+
+enum ReportRole {
+  ATTACKER
+  DEFENDER
+  GATHERER
+}
+
+enum BattleOutcome {
+  ATTACKER_WON
+  DEFENDER_WON
+  DRAW
+}
+
+enum ChestSource {
+  STARTER
+  DAILY
+  NPC_VICTORY
+  ADMIN
+}
+
+enum ScheduledEventType {
+  BUILDING_COMPLETE
+  TRAINING_COMPLETE
+  HEALING_COMPLETE
+  MARCH_ARRIVE
+  GATHER_COMPLETE
+  MARCH_RETURN
+  NPC_CAMP_RESPAWN
+  RESOURCE_NODE_RESPAWN
+}
+
+enum ShieldKind {
+  NEWBIE // shield_newbie: 24 h, Cidadela 5 ou atacar alguém
+  TRUCE // shield_truce: 30 min após perder um PvP
+}
+
+enum ScheduledEventStatus {
+  PENDING
+  DONE
+  CANCELLED
+  FAILED
+}
+
+// ─────────────────────────── Auth ───────────────────────────
+
+model User {
+  id                 String    @id @default(cuid())
+  username           String // como foi digitado (exibição)
+  usernameNormalized String    @unique // lower-case, usado no login
+  passwordHash       String
+  role               UserRole  @default(PLAYER)
+  createdAt          DateTime  @default(now()) @db.Timestamptz(3)
+  lastLoginAt        DateTime? @db.Timestamptz(3)
+
+  player        Player?
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique // sha256 do token opaco; o token em si nunca é salvo
+  expiresAt DateTime  @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────── Mundo ───────────────────────────
+
+model World {
+  id            String      @id @default(cuid())
+  name          String
+  seed          String // seed da geração determinística (shared/world)
+  width         Int // 120
+  height        Int // 120
+  chunkSize     Int         @default(16)
+  gameSpeed     Float       @default(1) // GDD GAME_SPEED: divide timers (obra, treino, cura, marcha, coleta, respawn)
+  economySpeed  Float       @default(1) // GDD ECONOMY_SPEED: multiplica produção passiva e coleta
+  configVersion String // CONFIG_VERSION do shared no momento da criação
+  status        WorldStatus @default(ACTIVE)
+  startedAt     DateTime    @default(now()) @db.Timestamptz(3)
+
+  players       Player[]
+  cities        City[]
+  resourceNodes ResourceNode[]
+  npcCamps      NpcCamp[]
+  marches       March[]
+  reports       Report[]
+
+  @@map("worlds")
+}
+
+model Player {
+  id               String      @id @default(cuid())
+  userId           String      @unique
+  worldId          String
+  displayName      String
+  bannerColor      Int         @default(0) // cor do escudo heráldico (0..11)
+  shieldUntil      DateTime?   @db.Timestamptz(3) // escudo ativo (novato ou trégua)
+  shieldKind       ShieldKind?
+  lastDailyChestAt DateTime?   @db.Timestamptz(3)
+  lastFreeSummonAt DateTime?   @db.Timestamptz(3) // chamado grátis da taverna (1/dia)
+  summonCount      Int         @default(0) // total de chamados (todo 10º é Épico)
+  power            Int         @default(0) // cache para ranking (recalculado em mudanças de tropa/prédio)
+  createdAt        DateTime    @default(now()) @db.Timestamptz(3)
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  world     World             @relation(fields: [worldId], references: [id])
+  city      City?
+  heroes    Hero[]
+  fragments HeroFragment[]
+  chests    Chest[]
+  inventory InventoryItem[]
+  marches   March[]
+  reports   ReportRecipient[]
+
+  @@unique([worldId, displayName])
+  @@index([worldId, power])
+  @@map("players")
+}
+
+// ─────────────────────────── Cidade ───────────────────────────
+
+model City {
+  id                 String   @id @default(cuid())
+  worldId            String
+  playerId           String   @unique
+  name               String
+  x                  Int
+  y                  Int
+  level              Int      @default(1) // cache = nível da Cidadela (keep)
+  food               Float    @default(0)
+  wood               Float    @default(0)
+  stone              Float    @default(0)
+  gold               Float    @default(0)
+  resourcesUpdatedAt DateTime @db.Timestamptz(3) // instante em que food/wood/stone/gold valiam isso
+  defenseHeroId      String?  @unique // comandante de defesa (escolhido no Salão)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  world           World         @relation(fields: [worldId], references: [id])
+  player          Player        @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  buildings       Building[]
+  troops          TroopStack[]
+  trainingJobs    TrainingJob[]
+  healingJobs     HealingJob[]
+  defenseHero     Hero?         @relation("CityDefenseHero", fields: [defenseHeroId], references: [id], onDelete: SetNull)
+  marches         March[]       @relation("MarchOrigin")
+  incomingMarches March[]       @relation("MarchTargetCity")
+
+  @@unique([worldId, x, y]) // também serve de índice para consulta por retângulo (chunk)
+  @@map("cities")
+}
+
+model Building {
+  id               String    @id @default(cuid())
+  cityId           String
+  slot             Int // posição no layout (config/cityLayout); slot 0 = keep
+  typeId           String // BuildingTypeId da config
+  level            Int       @default(0) // 0 = em construção pela primeira vez
+  upgradeStartedAt DateTime? @db.Timestamptz(3)
+  upgradeEndsAt    DateTime? @db.Timestamptz(3) // != null => upgrade em andamento para level + 1
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+
+  city City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@unique([cityId, slot])
+  @@index([cityId, upgradeEndsAt])
+  @@map("buildings")
+}
+
+/// Tropas em casa, disponíveis. Tropas em marcha ficam em MarchTroop.
+model TroopStack {
+  cityId      String
+  troopTypeId String // ex.: "infantry_t1"
+  count       Int    @default(0)
+  wounded     Int    @default(0) // feridos na Enfermaria (curam com HealingJob)
+
+  city City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@id([cityId, troopTypeId])
+  @@map("troop_stacks")
+}
+
+/// Fila do quartel: jobs sequenciais (startsAt = max(agora, fim do último job)).
+model TrainingJob {
+  id          String    @id @default(cuid())
+  cityId      String
+  troopTypeId String
+  count       Int
+  startsAt    DateTime  @db.Timestamptz(3)
+  endsAt      DateTime  @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3) // != null => tropas já somadas ao TroopStack
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  city City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@index([cityId, completedAt, endsAt])
+  @@map("training_jobs")
+}
+
+/// Fila da Enfermaria: mesmo padrão do TrainingJob (40% do custo e do tempo de treino).
+model HealingJob {
+  id          String    @id @default(cuid())
+  cityId      String
+  troopTypeId String
+  count       Int
+  startsAt    DateTime  @db.Timestamptz(3)
+  endsAt      DateTime  @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3) // != null => feridos já voltaram ao TroopStack.count
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  city City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@index([cityId, completedAt, endsAt])
+  @@map("healing_jobs")
+}
+
+// ─────────────────────────── Heróis e itens ───────────────────────────
+
+model Hero {
+  id            String   @id @default(cuid())
+  playerId      String
+  heroTypeId    String // HeroTypeId da config. Linha existe = herói liberado
+  level         Int      @default(1)
+  xp            Int      @default(0) // XP total acumulado; nível derivado pela curva do shared
+  activeMarchId String? // != null => herói ocupado nessa marcha
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  player      Player      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  activeMarch March?      @relation("HeroActiveMarch", fields: [activeMarchId], references: [id], onDelete: SetNull)
+  marchSlots  MarchHero[]
+  defending   City?       @relation("CityDefenseHero")
+
+  @@unique([playerId, heroTypeId]) // um herói de cada tipo por jogador
+  @@index([activeMarchId])
+  @@map("heroes")
+}
+
+/// Fragmentos de heróis ainda não liberados (GDD 9.1). Herói liberado: fragmento vira 100 XP.
+model HeroFragment {
+  playerId   String
+  heroTypeId String
+  count      Int    @default(0)
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([playerId, heroTypeId])
+  @@map("hero_fragments")
+}
+
+model InventoryItem {
+  playerId String
+  itemId   String // ItemId da config (ex.: "tome_xp_s", "speedup_5m")
+  quantity Int    @default(0)
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([playerId, itemId])
+  @@map("inventory_items")
+}
+
+// ─────────────────────────── Entidades do mapa ───────────────────────────
+
+model ResourceNode {
+  id                String             @id @default(cuid())
+  worldId           String
+  x                 Int
+  y                 Int
+  resourceType      ResourceType
+  level             Int
+  maxAmount         Int
+  remaining         Int
+  status            ResourceNodeStatus @default(AVAILABLE)
+  occupiedByMarchId String?            @unique // uma marcha coletando por vez
+  respawnAt         DateTime?          @db.Timestamptz(3)
+  generation        Int                @default(0) // incrementa a cada respawn (idempotência do evento)
+  updatedAt         DateTime           @updatedAt @db.Timestamptz(3)
+
+  world      World   @relation(fields: [worldId], references: [id])
+  occupiedBy March?  @relation("NodeOccupant", fields: [occupiedByMarchId], references: [id], onDelete: SetNull)
+  targetedBy March[] @relation("MarchTargetNode")
+
+  @@unique([worldId, x, y])
+  @@map("resource_nodes")
+}
+
+model NpcCamp {
+  id            String        @id @default(cuid())
+  worldId       String
+  x             Int
+  y             Int
+  campTypeId    String // CampTypeId = facção NPC (npc_hollow | npc_brine | npc_pale); tropas/baú vêm do nível
+  level         Int
+  status        NpcCampStatus @default(ACTIVE)
+  currentTroops Json? // { [troopTypeId]: count }; null = cheio. GDD: derrota do jogador não salva perdas (fica null)
+  defeatedAt    DateTime?     @db.Timestamptz(3)
+  respawnAt     DateTime?     @db.Timestamptz(3)
+  generation    Int           @default(0)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(3)
+
+  world      World   @relation(fields: [worldId], references: [id])
+  targetedBy March[] @relation("MarchTargetCamp")
+
+  @@unique([worldId, x, y])
+  @@index([status, respawnAt])
+  @@map("npc_camps")
+}
+
+// ─────────────────────────── Marchas ───────────────────────────
+
+model March {
+  id           String     @id @default(cuid())
+  worldId      String
+  playerId     String
+  originCityId String
+  type         MarchType
+  state        MarchState
+
+  // alvo
+  targetKind           MarchTargetKind
+  targetX              Int
+  targetY              Int
+  targetResourceNodeId String?
+  targetNpcCampId      String?
+  targetCityId         String?
+
+  // perna atual (o cliente interpola entre from e to usando legStartAt/legEndAt)
+  fromX      Float
+  fromY      Float
+  toX        Float
+  toY        Float
+  legStartAt DateTime @db.Timestamptz(3)
+  legEndAt   DateTime @db.Timestamptz(3)
+
+  speed         Float // casas por MINUTO (GDD 12), já com bônus de herói e GAME_SPEED
+  carryCapacity Int // carga total das tropas vivas (com bônus de carga)
+
+  gatherStartedAt DateTime? @db.Timestamptz(3)
+  gatherEndsAt    DateTime? @db.Timestamptz(3)
+
+  // saque/coleta carregado de volta
+  lootFood  Int @default(0)
+  lootWood  Int @default(0)
+  lootStone Int @default(0)
+  lootGold  Int @default(0)
+
+  chestTypeId String? // baú de vitória contra NPC; entra no inventário quando a marcha volta
+
+  version     Int       @default(0) // +1 a cada mudança de perna/estado; vai no payload do evento
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt DateTime? @db.Timestamptz(3)
+
+  world        World            @relation(fields: [worldId], references: [id])
+  player       Player           @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  originCity   City             @relation("MarchOrigin", fields: [originCityId], references: [id], onDelete: Cascade)
+  targetNode   ResourceNode?    @relation("MarchTargetNode", fields: [targetResourceNodeId], references: [id], onDelete: SetNull)
+  targetCamp   NpcCamp?         @relation("MarchTargetCamp", fields: [targetNpcCampId], references: [id], onDelete: SetNull)
+  targetCity   City?            @relation("MarchTargetCity", fields: [targetCityId], references: [id], onDelete: SetNull)
+  occupiedNode ResourceNode?    @relation("NodeOccupant")
+  troops       MarchTroop[]
+  heroes       MarchHero[]
+  activeHeroes Hero[]           @relation("HeroActiveMarch")
+  events       ScheduledEvent[]
+
+  @@index([worldId, state])
+  @@index([playerId, state])
+  @@index([targetCityId, state])
+  @@map("marches")
+}
+
+model MarchTroop {
+  marchId     String
+  troopTypeId String
+  sent        Int // quantas saíram
+  alive       Int // quantas continuam vivas (atualizado após combate)
+  wounded     Int    @default(0) // feridos que voltam com a marcha (entram na Enfermaria na volta)
+
+  march March @relation(fields: [marchId], references: [id], onDelete: Cascade)
+
+  @@id([marchId, troopTypeId])
+  @@map("march_troops")
+}
+
+model MarchHero {
+  marchId String
+  heroId  String
+  slot    Int // 0 = comandante principal, 1 e 2 = secundários
+
+  march March @relation(fields: [marchId], references: [id], onDelete: Cascade)
+  hero  Hero  @relation(fields: [heroId], references: [id], onDelete: Cascade)
+
+  @@id([marchId, slot])
+  @@unique([marchId, heroId])
+  @@index([heroId])
+  @@map("march_heroes")
+}
+
+// ─────────────────────────── Relatórios e baús ───────────────────────────
+
+model Report {
+  id               String         @id @default(cuid())
+  worldId          String
+  kind             ReportKind
+  outcome          BattleOutcome? // null em GATHER
+  x                Int
+  y                Int
+  marchId          String? // sem FK: o relatório sobrevive à limpeza de marchas antigas
+  attackerPlayerId String?
+  defenderPlayerId String?
+  payload          Json // BattleReportPayload | GatherReportPayload (@wn/shared contracts/rest.ts)
+  createdAt        DateTime       @default(now()) @db.Timestamptz(3)
+
+  world      World             @relation(fields: [worldId], references: [id])
+  recipients ReportRecipient[]
+
+  @@index([worldId, createdAt])
+  @@map("reports")
+}
+
+model ReportRecipient {
+  reportId  String
+  playerId  String
+  role      ReportRole
+  readAt    DateTime?  @db.Timestamptz(3)
+  createdAt DateTime   @default(now()) @db.Timestamptz(3)
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([reportId, playerId])
+  @@index([playerId, createdAt])
+  @@map("report_recipients")
+}
+
+model Chest {
+  id          String      @id @default(cuid())
+  playerId    String
+  chestTypeId String // ChestTypeId da config
+  source      ChestSource
+  sourceRef   String? // ex.: reportId da vitória que gerou o baú
+  openedAt    DateTime?   @db.Timestamptz(3)
+  rewards     Json? // ChestRewardDto[] sorteadas na abertura (auditoria)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId, openedAt])
+  @@map("chests")
+}
+
+// ─────────────────────────── Agendador ───────────────────────────
+
+model ScheduledEvent {
+  id          String               @id @default(cuid())
+  type        ScheduledEventType
+  status      ScheduledEventStatus @default(PENDING)
+  runAt       DateTime             @db.Timestamptz(3)
+  payload     Json // ex.: { marchId, version } | { cityId, buildingId, level } | { cityId, jobId } | { campId, generation }
+  dedupeKey   String               @unique // ex.: "march:<id>:v3:arrive" — impede agendar duas vezes
+  marchId     String?
+  attempts    Int                  @default(0)
+  lastError   String?
+  createdAt   DateTime             @default(now()) @db.Timestamptz(3)
+  processedAt DateTime?            @db.Timestamptz(3)
+
+  march March? @relation(fields: [marchId], references: [id], onDelete: Cascade)
+
+  @@index([status, runAt])
+  @@map("scheduled_events")
+}

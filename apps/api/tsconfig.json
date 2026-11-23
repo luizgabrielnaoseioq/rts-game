@@ -1,0 +1,23 @@
+{
+  "//": "Só para o editor: o build/dev usa SWC, sem tsc.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node10",
+    "lib": ["ES2022"],
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@wn/shared": ["../../packages/shared/src/index.ts"]
+    },
+    "types": ["node"]
+  },
+  "include": ["src", "prisma"]
+}

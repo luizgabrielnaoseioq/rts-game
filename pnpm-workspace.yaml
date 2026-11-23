@@ -1,0 +1,12 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 11: scripts de instalação ficam bloqueados por padrão.
+# "allowBuilds" substitui o antigo "onlyBuiltDependencies" (pnpm 10).
+allowBuilds:
+  prisma: true
+  "@prisma/client": true
+  "@prisma/engines": true
+  esbuild: true
+  "@swc/core": true

@@ -1,0 +1,62 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`gerador > é determinístico (mesma seed, mesmo mundo) e muda com outra seed 1`] = `
+[
+  {
+    "biome": "frost",
+    "kind": "node",
+    "level": 6,
+    "maxAmount": 47186,
+    "resourceType": "stone",
+    "x": 29,
+    "y": 0,
+  },
+  {
+    "biome": "frost",
+    "kind": "node",
+    "level": 6,
+    "maxAmount": 26214,
+    "resourceType": "gold",
+    "x": 63,
+    "y": 0,
+  },
+  {
+    "biome": "frost",
+    "kind": "node",
+    "level": 6,
+    "maxAmount": 26214,
+    "resourceType": "gold",
+    "x": 100,
+    "y": 0,
+  },
+]
+`;
+
+exports[`gerador > é determinístico (mesma seed, mesmo mundo) e muda com outra seed 2`] = `
+[
+  {
+    "biome": "frost",
+    "campTypeId": "npc_pale",
+    "kind": "camp",
+    "level": 10,
+    "x": 25,
+    "y": 0,
+  },
+  {
+    "biome": "frost",
+    "campTypeId": "npc_pale",
+    "kind": "camp",
+    "level": 10,
+    "x": 78,
+    "y": 0,
+  },
+  {
+    "biome": "frost",
+    "campTypeId": "npc_pale",
+    "kind": "camp",
+    "level": 10,
+    "x": 91,
+    "y": 0,
+  },
+]
+`;
